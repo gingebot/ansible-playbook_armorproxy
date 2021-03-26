@@ -1,0 +1,21 @@
+global
+        log 127.0.0.1:514 local0
+
+defaults
+        log     global
+        mode    tcp
+        option  tcplog
+        timeout connect         10s
+        timeout client          1m
+        timeout server          1m
+
+{% for var in proxy %}
+frontend {{ var.name }}
+        bind {{ var.vip }}:{{ var.vip_port }}
+        default_backend {{ var.name }}_backend
+
+backend {{ var.name }}_backend
+        mode tcp
+        server {{ var.name }}  {{ var.destination }}
+
+{% endfor %}

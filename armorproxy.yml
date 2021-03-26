@@ -1,0 +1,99 @@
+---
+- name: haproxy pair configuration
+  hosts: proxy_pair
+  vars:
+    proxy:
+      - name: panopta
+        vip: 10.10.10.10
+        vip_port: 443
+        destination: 1a.mon.armor.com:8443
+      - name: armpor_api
+        vip: 20.20.20.20
+        vip_port: 443
+        destination: api.armor.com:443
+      - name: armpor_getcore
+        vip: 30.30.30.30
+        vip_port: 443
+        destination: get.core.armor.com:443
+    num_hosts: "{{ groups['proxy_pair'] | length }}"
+  tasks:
+    - name: Validate playbook working with 2 nodes
+      fail: msg="The number of nodes must be exactly 2!"
+      when: num_hosts | int != 2
+
+    - name: install required packages
+      package:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - haproxy
+        - keepalived
+
+    - name: update sysctl parameters to allow nonlocal bind
+      sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: '1'
+        state: present
+        sysctl_file: /etc/sysctl.d/100-haproxy.conf
+        reload: yes
+
+    - name: configure rsyslog to receive and log haproxy logs
+      template:
+        src: rsyslog.j2
+        dest: /etc/rsyslog.d/haproxy.conf
+      notify: restart rsyslog
+
+    - name: configure haproxy
+      template:
+        src: haproxy.j2
+        dest: /etc/haproxy/haproxy.cfg
+      notify: restart and enable haproxy
+
+    - name: create local facts directory
+      file:
+        path: /etc/ansible/facts.d
+        state: directory
+
+    - name: set master local fact to ID one server as master, if not already set
+      shell:
+        cmd: echo '{{ my_facts | to_json }}' > /etc/ansible/facts.d/role.fact
+        creates: /etc/ansible/facts.d/role.fact
+      vars:
+        my_facts:
+          is_master: "{{ true if play_hosts.index(inventory_hostname) == 0 else false }}"
+      register: role_fact
+
+    - name: gather facts if local fact has just been set
+      setup:
+      when: role_fact.changed
+
+    - name: set keepalived password
+      set_fact:
+        keepalived_password: "{{ lookup('password', '/dev/null length=15 chars=ascii_letters') }}"
+      run_once: true
+
+    - name: set keepalived config
+      template:
+        src: keepalived.j2
+        dest: /etc/keepalived/keepalived.conf
+      notify: restart and enable keepalived
+
+  handlers:
+
+    - name: restart rsyslog
+      service:
+        name: rsyslog
+        state: restarted
+
+    - name: restart and enable haproxy
+      service:
+        name: haproxy
+        state: restarted
+        enabled: true
+
+    - name: restart and enable keepalived
+      service:
+        name: keepalived
+        state: restarted
+        enabled: true
+
